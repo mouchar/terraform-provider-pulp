@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/e-breuninger/terraform-provider-pulp/internal"
 	client "github.com/e-breuninger/terraform-provider-pulp/internal/client"
@@ -24,6 +25,7 @@ import (
 
 var _ resource.Resource = &pulpRepositoryResource{}
 var _ resource.ResourceWithImportState = &pulpRepositoryResource{}
+var _ resource.ResourceWithValidateConfig = &pulpRepositoryResource{}
 
 func NewPulpRepositoryResource() resource.Resource {
 	return &pulpRepositoryResource{}
@@ -42,6 +44,7 @@ type PulpRepositoryModel struct {
 	Remote             types.String `tfsdk:"remote"`
 	PulpLabels         types.Map    `tfsdk:"pulp_labels"`
 	RetainRepoVersions types.Int64  `tfsdk:"retain_repo_versions"`
+	Autopublish        types.Bool   `tfsdk:"autopublish"`
 }
 
 func (r *pulpRepositoryResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -130,8 +133,31 @@ func (r *pulpRepositoryResource) Schema(_ context.Context, _ resource.SchemaRequ
 					int64validator.AtLeast(1),
 				},
 			},
+			"autopublish": schema.BoolAttribute{
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Whether to automatically create publications for new repository versions and update any pointing distributions. Only supported for content types: `file`, `deb`, `rpm`.",
+			},
 		},
 	}
+}
+
+var autopublishSupportedTypes = []string{"file", "deb", "rpm"}
+
+func (r *pulpRepositoryResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config PulpRepositoryModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() || config.Autopublish.IsNull() || config.Autopublish.IsUnknown() {
+		return
+	}
+	if slices.Contains(autopublishSupportedTypes, config.ContentType.ValueString()) {
+		return
+	}
+	resp.Diagnostics.AddAttributeError(
+		path.Root("autopublish"),
+		"autopublish not supported for this content_type",
+		fmt.Sprintf("autopublish is only supported for content types: file, deb, rpm. Got %q.", config.ContentType.ValueString()),
+	)
 }
 
 func (r *pulpRepositoryResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -169,6 +195,10 @@ func buildRepositoryBody(ctx context.Context, plan PulpRepositoryModel) map[stri
 		body["retain_repo_versions"] = plan.RetainRepoVersions.ValueInt64()
 	}
 
+	if !plan.Autopublish.IsNull() && !plan.Autopublish.IsUnknown() {
+		body["autopublish"] = plan.Autopublish.ValueBool()
+	}
+
 	return body
 }
 
@@ -197,6 +227,13 @@ func hydrateRepositoryModel(ctx context.Context, data map[string]any, model *Pul
 		model.RetainRepoVersions = types.Int64Value(int64(v))
 	case nil:
 		model.RetainRepoVersions = types.Int64Null()
+	}
+
+	switch v := data["autopublish"].(type) {
+	case bool:
+		model.Autopublish = types.BoolValue(v)
+	default:
+		model.Autopublish = types.BoolNull()
 	}
 
 	// Convert pulp_labels from map[string]any to types.Map

@@ -8,9 +8,71 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/e-breuninger/terraform-provider-pulp/internal"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 )
+
+func TestRepositoryAutopublish(t *testing.T) {
+	suffix := internal.RandomSuffix()
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// Create with autopublish = true on a supported type
+			{
+				Config: providerConfig + fmt.Sprintf(`
+			resource "pulp_repository" "file_ap" {
+			  content_type = "file"
+			  plugin_name  = "file"
+			  name         = "file-ap-%s"
+			  description  = "file repository with autopublish"
+			  autopublish  = true
+			}
+			`, suffix),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("pulp_repository.file_ap", "autopublish", "true"),
+					resource.TestCheckResourceAttrSet("pulp_repository.file_ap", "pulp_href"),
+				),
+			},
+			// Update autopublish to false
+			{
+				Config: providerConfig + fmt.Sprintf(`
+			resource "pulp_repository" "file_ap" {
+			  content_type = "file"
+			  plugin_name  = "file"
+			  name         = "file-ap-%s"
+			  description  = "file repository with autopublish"
+			  autopublish  = false
+			}
+			`, suffix),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("pulp_repository.file_ap", "autopublish", "false"),
+				),
+			},
+		},
+	})
+}
+
+func TestRepositoryAutopublishUnsupportedType(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// autopublish on an unsupported type must fail at plan time
+			{
+				Config: providerConfig + `
+			resource "pulp_repository" "container_ap" {
+			  content_type = "container"
+			  plugin_name  = "container"
+			  name         = "container-ap"
+			  description  = "container repository"
+			  autopublish  = true
+			}
+			`,
+				ExpectError: regexp.MustCompile(`autopublish not supported for this content_type`),
+			},
+		},
+	})
+}
 
 func TestRepositoryResource(t *testing.T) {
 	resource.Test(t, resource.TestCase{
